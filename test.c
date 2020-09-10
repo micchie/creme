@@ -60,7 +60,7 @@ server()
 		goto error_wait;
 	}
 	fprintf(stdout, "/dev/creme opened\n");
-	val = ( (uint64_t)evfd << 32) | newfd;
+	val = ((uint64_t)evfd << 32) | newfd;
 	if (ioctl(crfd, 0, (unsigned long)&val, sizeof(val))) {
 		perror("ioctl");
 	}
@@ -81,7 +81,8 @@ server()
 			continue;
 		}
 		if (pfds[0].revents & POLLIN) {
-			fprintf(stdout, "eventfd POLLIN\n");
+			eventfd_read(pfds[0].fd, &cnt);
+			fprintf(stdout, "eventfd POLLIN counter %u\n", cnt);
 			break;
 		} else if (pfds[0].revents & POLLERR) {
 			fprintf(stdout, "eventfd POLLERR\n");
