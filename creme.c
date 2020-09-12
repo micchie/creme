@@ -2,6 +2,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/fs.h>
+#include <linux/file.h>
 #include <linux/net.h> // sockfd_lookup()
 #include <linux/socket.h>
 #include <net/sock.h>
