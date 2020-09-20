@@ -3,22 +3,32 @@
 #include <sys/wait.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <sys/epoll.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <stdio.h>
+#include <string.h>
+
+#define MAXCONN	10
+#define ARRAYSIZ(a)	(sizeof(a) / sizeof(a[0]))
 
 void
 server()
 {
-	int fd, newfd, evfd, crfd, n;
-	uint64_t val;
-	struct sockaddr_in sin, c;
+	int fd, crfd, n, epfd, maxretry = 0;
+	struct sockaddr_in sin;
 	int wstatus = 0;
-	struct pollfd pfds[1];
-	eventfd_t cnt;
+	struct epoll_event ev;
+
+	crfd = open("/dev/creme", O_RDWR);
+	if (crfd < 0) {
+		perror("open");
+		return;
+	}
+	fprintf(stdout, "/dev/creme opened\n");
 
 	fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (fd < 0) {
@@ -37,61 +47,83 @@ server()
 		close(fd);
 		goto error_wait;
 	}
-	if (listen(fd, 1) < 0) {
+	if (listen(fd, MAXCONN) < 0) {
 		perror("listen");
 		close(fd);
 		goto error_wait;
 	}
 	fprintf(stdout, "listen done\n");
-	newfd = accept(fd, (struct sockaddr *)&c, &(socklen_t){sizeof(c)});
-	if (newfd < 0) {
-		perror("accept");
+
+	epfd = epoll_create1(EPOLL_CLOEXEC);
+	if (epfd < 0) {
+		perror("epoll_create1");
 		close(fd);
 		goto error_wait;
 	}
-	fprintf(stdout, "accept done\n");
-
-	evfd = eventfd(0, 0);
-	fprintf(stdout, "eventfd created\n");
-	crfd = open("/dev/creme", O_RDWR);
-	if (crfd < 0) {
-		perror("open");
-		close(evfd);
+	memset(&ev, 0, sizeof(ev));
+	ev.events = POLLIN;
+	ev.data.fd = fd;
+	if (epoll_ctl(epfd, EPOLL_CTL_ADD, ev.data.fd, &ev)) {
+		perror("epoll_ctl");
+		close(epfd);
+		close(fd);
 		goto error_wait;
 	}
-	fprintf(stdout, "/dev/creme opened\n");
-	val = ((uint64_t)evfd << 32) | newfd;
-	if (ioctl(crfd, 0, (unsigned long)&val, sizeof(val))) {
-		perror("ioctl");
-	}
-	fprintf(stdout, "ioctl done\n");
+	for (n = 0; n <= MAXCONN && maxretry < MAXCONN * 10; n++) {
+		struct epoll_event evts[MAXCONN*4];
+		int nfds, i;
 
-	close(newfd);
-	fprintf(stdout, "closed newfd\n");
+		maxretry++;
 
-	for (n = 0; n < 10; n++) {
-		int nev;
-
-		pfds[0].fd = evfd;
-		pfds[0].events = POLLIN | POLLERR;
-		nev = poll(pfds, 1, 500);
-		if (nev < 0) {
-			perror("poll");
-		} else if (nev == 0) {
-			continue;
-		}
-		if (pfds[0].revents & POLLIN) {
-			eventfd_read(pfds[0].fd, &cnt);
-			fprintf(stdout, "eventfd POLLIN counter %u\n", cnt);
-			break;
-		} else if (pfds[0].revents & POLLERR) {
-			fprintf(stdout, "eventfd POLLERR\n");
+		nfds = epoll_wait(epfd, evts, ARRAYSIZ(evts), 1000);
+		if (nfds < 0) {
+			perror("epoll_wait");
 			break;
 		}
+		fprintf(stdout, "epoll_wait %d events\n", nfds);
+		for (i = 0; i < nfds; i++) {
+			int j;
+			int infd = evts[i].data.fd;
+
+			if (infd == fd) {
+				struct epoll_event newev;
+				int newfd, evntfd;
+				uint64_t val;
+
+				newfd = accept(fd, (struct sockaddr *)&sin,
+					       &(socklen_t){sizeof(sin)});
+				if (newfd < 0) {
+					perror("accept");
+					/* XXX */
+				}
+				evntfd = eventfd(0, 0);
+				val = ((uint64_t)evntfd << 32) | newfd;
+				if (ioctl(crfd, 0, (unsigned long)&val,
+				    sizeof(val))) {
+					perror("ioctl");
+				}
+				fprintf(stdout, "  ioctl (newfd %d eventfd %d) done\n", newfd, evntfd);
+
+				memset(&newev, 0, sizeof(newev));
+				newev.events = POLLIN;
+				newev.data.fd = evntfd;
+				epoll_ctl(epfd, EPOLL_CTL_ADD, evntfd, &newev);
+
+				close(newfd);
+			} else {
+				eventfd_t cnt;
+
+				eventfd_read(infd, &cnt);
+				fprintf(stdout,
+					"  eventfd %d POLLIN counter %lu\n",
+					infd, cnt);
+				close(infd);
+				n++;
+			}
+		}
 	}
-	if (n == 10) {
-		fprintf(stderr, "eventfd has never fired\n");
-	}
+	close(epfd);
+
 error_wait:
 	wait(&wstatus);
 	fprintf(stdout, "wait done\n");
@@ -101,24 +133,33 @@ error_wait:
 void
 client()
 {
-	int fd;
-	struct sockaddr_in sin;
+	int i;
+	int fds[MAXCONN];
        
-	usleep(1000); // wait for server setup
+	usleep(100); // wait for server setup
 
-	fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (fd < 0) {
-		perror("socket");
-		return;
+	for (i = 0; i < MAXCONN; i++) {
+		int fd;
+		struct sockaddr_in sin;
+
+		fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+		if (fd < 0) {
+			perror("socket");
+			return;
+		}
+		sin.sin_family = AF_INET;
+		sin.sin_port = htons(50000);
+		inet_pton(AF_INET, "127.0.0.1", &sin.sin_addr);
+		if (connect(fd, (struct sockaddr *)&sin, sizeof(sin))) {
+			perror("connect");
+			return;
+		}
+		fds[i] = fd;
 	}
-	sin.sin_family = AF_INET;
-	sin.sin_port = htons(50000);
-	inet_pton(AF_INET, "127.0.0.1", &sin.sin_addr);
-	if (connect(fd, (struct sockaddr *)&sin, sizeof(sin))) {
-		perror("connect");
-		return;
+	fprintf(stdout, "connected %d fds\n", i);
+	for (i = 0; i < MAXCONN; i++) {
+		close(fds[i]);
 	}
-	fprintf(stdout, "connect done\n");
 }
 
 int

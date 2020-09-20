@@ -80,7 +80,8 @@ creme_notify(struct sock *sk)
 
 	eventfd_signal(ctx, 1);
 	eventfd_ctx_put(ctx);
-	sk->sk_destruct(sk);
+	if (sk->sk_destruct)
+		sk->sk_destruct(sk);
 }
 
 static long

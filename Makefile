@@ -1,4 +1,4 @@
-.PHONY: module app clean test creme.c
+.PHONY: module app clean test creme.c creme.o
 obj-m += creme.o
 PROG = module app
 TEST = test
