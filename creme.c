@@ -44,7 +44,8 @@ creme_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static void creme_csd_rcu(struct rcu_head *rcu)
+static void
+creme_csd_rcu(struct rcu_head *rcu)
 {
 	struct creme_sk_data *csd =
 		container_of(rcu, struct creme_sk_data, rcu);
@@ -144,8 +145,10 @@ static int __init
 creme_init(void)
 {
 	int error = misc_register(&creme_miscdev);
-	if (error)
+	if (error) {
 		printk(KERN_ERR "%s misc_register() failed\n", __FUNCTION__);
+		return -1;
+	}
 	creme_dev = &creme_miscdev;
 	printk(KERN_INFO "loaded creme\n");
 
