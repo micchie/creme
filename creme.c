@@ -24,8 +24,6 @@ static DEFINE_HASHTABLE(creme_htable, 10);
       hlist_add_tail_rcu(node, &hashtable[hash_min(key, HASH_BITS(hashtable))])
 static DEFINE_SPINLOCK(creme_htable_lock);
 
-/* Prototypes for device functions */
-
 struct creme_sk_data {
 	struct rcu_head rcu;
 	struct hlist_node hlist;
@@ -69,7 +67,7 @@ creme_notify(struct sock *sk)
 	}
 	rcu_read_unlock();
 	if (!ctx) {
-		printk(KERN_ERR "NOT found sk %p\n", sk);
+		printk(KERN_ERR "%s sk %p NOT found\n", __FUNCTION__, sk);
 		return;
 	}
 
@@ -109,8 +107,8 @@ creme_unlocked_ioctl(struct file *file, u_int cmd, u_long data /* arg */)
 	lock_sock(sk);
 	csd = kmalloc(sizeof(*csd), GFP_ATOMIC | __GFP_ZERO);
 	if (IS_ERR(csd)) {
-		error = -ENOMEM;
 		eventfd_ctx_put(ctx);
+		error = -ENOMEM;
 	} else {
 		csd->sk = sk;
 		csd->ctx = ctx;
